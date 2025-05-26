@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import KFold
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.experimental import enable_hist_gradient_boosting  # noqa
 from sklearn.ensemble import HistGradientBoostingRegressor
 from xgboost import XGBRegressor
@@ -12,41 +12,51 @@ from sklearn.base import clone
 # Load data
 train = pd.read_csv("train.csv")
 test = pd.read_csv("test.csv")
-X = train.drop(columns=["id", "yield", "Row#"])
+X = train.drop(columns=["id", "yield"])
 y = train["yield"]
-X_test = test.drop(columns=["id", "Row#"])
+X_test = test.drop(columns=["id"])
 
 # Feature Engineering
 def create_features(df):
     df = df.copy()
     df["bee_total"] = df["honeybee"] + df["bumbles"] + df["andrena"] + df["osmia"]
     df["bee_to_clonesize"] = df["bee_total"] / df["clonesize"]
-    df["temp_range_upper"] = df["MaxOfUpperTRange"] - df["MinOfUpperTRange"]
-    df["temp_range_lower"] = df["MaxOfLowerTRange"] - df["MinOfLowerTRange"]
+    
+    # חישובים שמבוססים רק על עמודות שעדיין קיימות
+    if "MaxOfUpperTRange" in df.columns and "MinOfUpperTRange" in df.columns:
+        df["temp_range_upper"] = df["MaxOfUpperTRange"] - df["MinOfUpperTRange"]
+    if "MaxOfLowerTRange" in df.columns and "MinOfLowerTRange" in df.columns:
+        df["temp_range_lower"] = df["MaxOfLowerTRange"] - df["MinOfLowerTRange"]
+    
     df["fruitmass_per_seed"] = df["fruitmass"] / df["seeds"]
     df["fruit_score"] = df["fruitset"] * df["fruitmass"]
-    df["raining_ratio"] = df["RainingDays"] / (df["AverageRainingDays"] + 1e-5)
+    
+    if "RainingDays" in df.columns and "AverageRainingDays" in df.columns:
+        df["raining_ratio"] = df["RainingDays"] / (df["AverageRainingDays"] + 1e-5)
+    
     df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
     return df
 
+
 X = create_features(X)
 X_test = create_features(X_test)
+X_test = X_test[X.columns]  
 
-# Feature selection
-selector = SelectKBest(score_func=f_regression, k=21)
+# Feature selection (use all remaining features)
+selector = SelectKBest(score_func=f_regression, k='all')
 X_selected = selector.fit_transform(X, y)
 X_test_selected = selector.transform(X_test)
 
-# Best ensemble weights
+# Best ensemble weights (same as before)
 model_weights = {
     "xgb": 0.2515,
     "optuna_hgbr": 0.5263,
     "gbr": 0.2222
 }
 
-# Base models
+# Base models (reduce n_estimators to 100 for speed)
 base_models = {
-    "xgb": XGBRegressor(n_estimators=250, max_depth=4, learning_rate=0.05, random_state=42, verbosity=0),
+    "xgb": XGBRegressor(n_estimators=100, max_depth=4, learning_rate=0.05, random_state=42, verbosity=0),
     "optuna_hgbr": HistGradientBoostingRegressor(
         learning_rate=0.0067,
         max_iter=700,
@@ -55,7 +65,7 @@ base_models = {
         l2_regularization=0.583,
         random_state=42
     ),
-    "gbr": GradientBoostingRegressor(n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42),
+    "gbr": GradientBoostingRegressor(n_estimators=100, max_depth=4, learning_rate=0.05, random_state=42),
 }
 
 # Cross-validation prediction
